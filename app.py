@@ -6,31 +6,62 @@ from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
 import time
-import random
 
-# 1. 頁面基本設定
+# 1. 頁面美化設定
 st.set_page_config(page_title="全球美股量化診斷儀", layout="wide")
 
-# 2. 側邊欄參數 (取消滑桿，僅保留輸入框)
-st.sidebar.title("🛡️ 參數設定")
-ticker_input = st.sidebar.text_input("輸入美股代號 (多支用逗號隔開)", "NVDA, AAPL").upper()
-ticker_list = [t.strip() for t in ticker_input.split(",") if t.strip()]
+st.markdown("""
+    <style>
+    .stApp { background-color: #0e1117; }
+    div[data-testid="stMetric"] {
+        background-color: #1e2130;
+        border: 1px solid #3e4150;
+        padding: 15px;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    }
+    h1, h2, h3 { color: #deff9a !important; font-family: 'Segoe UI', sans-serif; }
+    .stDivider { border-bottom: 2px solid #3e4150; }
+    </style>
+    """, unsafe_allow_stdio=True)
 
-# 固定均線參數
-MA_FAST_VAL = 50
-MA_SLOW_VAL = 200
+# 2. 側邊欄設計
+st.sidebar.title("📊 市場監控")
 
-# 3. 數據抓取函數 (強化避開限流邏輯)
-@st.cache_data(ttl=86400)
-def fetch_stock_full_data(symbol):
-    time.sleep(random.uniform(0.5, 1.5)) # 微小延遲模擬真人
+# 獲取熱門股漲幅榜 (示範清單：科技股與權值股)
+@st.cache_data(ttl=600)
+def get_top_movers():
+    # 這裡預設一組觀察名單，模擬市場掃描
+    watch_list = ["NVDA", "AAPL", "TSLA", "AMD", "MSFT", "GOOGL", "META", "AVGO", "SMCI", "ARM", "NFLX", "COIN"]
+    data = []
+    for t in watch_list:
+        try:
+            s = yf.Ticker(t)
+            # 抓取最近兩天數據計算漲跌幅
+            h = s.history(period="2d")
+            if len(h) >= 2:
+                change = ((h['Close'].iloc[-1] / h['Close'].iloc[-2]) - 1) * 100
+                data.append({"代號": t, "漲跌": round(change, 2), "現價": round(h['Close'].iloc[-1], 2)})
+        except:
+            continue
+    df = pd.DataFrame(data).sort_values(by="漲跌", ascending=False)
+    return df
+
+st.sidebar.subheader("今日表現排行榜")
+top_df = get_top_movers()
+st.sidebar.table(top_df.head(10))
+
+st.sidebar.divider()
+target = st.sidebar.text_input("🔍 輸入深度診斷代號", "NVDA").upper().strip()
+
+# 3. 數據抓取函數
+@st.cache_data(ttl=3600)
+def fetch_data(symbol):
     try:
         stock = yf.Ticker(symbol)
-        df = stock.history(period="2y", timeout=25)
-        
+        df = stock.history(period="2y", timeout=20)
         if df.empty:
-            df = yf.download(symbol, period="2y", progress=False, timeout=25)
-            
+            df = yf.download(symbol, period="2y", progress=False)
         if not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
@@ -39,89 +70,43 @@ def fetch_stock_full_data(symbol):
         return None, None
     return None, None
 
-# 4. 主畫面邏輯 (移除按鈕判斷，直接執行)
-st.title("📈 智能量化診斷儀")
-
-if ticker_list:
-    tab1, tab2 = st.tabs(["📌 深度診斷報告", "📋 多標的快速對比"])
-
-    # --- Tab 1: 深度報告 ---
-    with tab1:
-        target = ticker_list[0]
-        df, info = fetch_stock_full_data(target)
+# 4. 主畫面深度報告
+if target:
+    st.title(f"🚀 {target} 深度量化診斷")
+    df, info = fetch_data(target)
+    
+    if df is not None and not df.empty:
+        # 指標計算
+        df['SMA_F'] = ta.sma(df['Close'], length=50)
+        df['SMA_S'] = ta.sma(df['Close'], length=200)
+        df['RSI'] = ta.rsi(df['Close'], length=14)
         
-        if df is not None and not df.empty:
-            # 指標計算
-            df['SMA_F'] = ta.sma(df['Close'], length=MA_FAST_VAL)
-            df['SMA_S'] = ta.sma(df['Close'], length=MA_SLOW_VAL)
-            df['RSI'] = ta.rsi(df['Close'], length=14)
-            
-            last = df.iloc[-1]
-            p_val = float(last['Close'])
-            r_val = float(last['RSI']) if not pd.isna(last['RSI']) else 50.0
-            f_val = float(last['SMA_F']) if not pd.isna(last['SMA_F']) else 0.0
-            s_val = float(last['SMA_S']) if not pd.isna(last['SMA_S']) else 0.0
+        last = df.iloc[-1]
+        p_val, r_val = float(last['Close']), float(last['RSI'])
+        f_val, s_val = float(last['SMA_F']), float(last['SMA_S'])
 
-            # 規模判定
-            mcap = info.get('marketCap', 0)
-            if mcap >= 2e11: size_tag = "💎 超大型股 (Mega-Cap)"
-            elif mcap >= 1e10: size_tag = "🏢 大型股 (Large-Cap)"
-            elif mcap >= 2e9: size_tag = "🧱 中型股 (Mid-Cap)"
-            else: size_tag = "🌱 小型股 (Small-Cap)"
+        # 市值規模判定
+        mcap = info.get('marketCap', 0)
+        size = "💎 超大型股" if mcap > 2e11 else "🏢 大型股" if mcap > 1e10 else "🧱 中型股" if mcap > 2e9 else "🌱 小型股"
+        
+        st.markdown(f"**公司：** `{info.get('longName', 'N/A')}` | **規模：** `{size}` | **產業：** `{info.get('sector', 'N/A')}`")
+        
+        # 指標卡
+        st.divider()
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("當前股價", f"${p_val:.2f}")
+        c2.metric("RSI 動能", f"{r_val:.1f}")
+        c3.metric("50MA (季線)", f"${f_val:.2f}")
+        c4.metric("200MA (年線)", f"${s_val:.2f}")
 
-            st.subheader(f"🔍 {target} | {info.get('longName', target)}")
-            st.markdown(f"**市值規模：** `{size_tag}` | **產業：** `{info.get('sector', 'N/A')}`")
-
-            # 操作建議
-            st.divider()
-            col_adv1, col_adv2, col_adv3 = st.columns(3)
-            with col_adv1:
-                st.write("### ⚡ 短線建議")
-                if r_val > 70: st.warning("過熱：RSI進入超買區，建議分批獲利。")
-                elif r_val < 30: st.success("超跌：RSI進入超賣區，具備反彈潛力。")
-                else: st.info("中性：目前動能穩定。")
-            with col_adv2:
-                st.write("### 🌀 中線建議")
-                if p_val > f_val: st.success(f"多頭：股價站穩 {MA_FAST_VAL}MA 之上。")
-                else: st.error(f"弱勢：股價跌破 {MA_FAST_VAL}MA，保守操作。")
-            with col_adv3:
-                st.write("### 📜 長線建議")
-                if p_val > s_val: st.success(f"長多：運行於 {MA_SLOW_VAL}MA 之上，多頭趨勢。")
-                else: st.warning(f"保守：股價低於 {MA_SLOW_VAL}MA，長線尚未回暖。")
-
-            # 指標卡
-            st.divider()
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("當前股價", f"${p_val:.2f}")
-            c2.metric("RSI動能", f"{r_val:.1f}")
-            c3.metric(f"{MA_FAST_VAL}MA", f"${f_val:.2f}")
-            c4.metric(f"{MA_SLOW_VAL}MA", f"${s_val:.2f}")
-
-            # 圖表
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
-            fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['SMA_F'], name=f'{MA_FAST_VAL}MA', line=dict(color='cyan')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['SMA_S'], name=f'{MA_SLOW_VAL}MA', line=dict(color='magenta')), row=1, col=1)
-            fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='量', marker_color='gray', opacity=0.3), row=2, col=1)
-            fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.error(f"目前 Yahoo 數據抓取失敗，請確認代號或稍後再試。")
-
-    # --- Tab 2: 多標的對比 ---
-    with tab2:
-        st.subheader("📋 快速規模對比")
-        summary_list = []
-        for t in ticker_list:
-            d, i = fetch_stock_full_data(t)
-            if d is not None:
-                summary_list.append({
-                    "代號": t, 
-                    "股價": round(float(d['Close'].iloc[-1]), 2), 
-                    "市值(B)": round(i.get('marketCap', 0)/1e9, 1),
-                    "產業": i.get('sector', 'N/A')
-                })
-        if summary_list:
-            st.table(pd.DataFrame(summary_list))
-else:
-    st.info("👈 請在左側輸入代號開始分析。")
+        # 操作建議
+        st.divider()
+        st.write("### 📝 操作建議")
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.write("#### ⚡ 短線 (RSI)")
+            if r_val > 70: st.warning("過熱：不宜追高")
+            elif r_val < 30: st.success("超跌：具反彈潛力")
+            else: st.info("中性：動能盤整")
+        with col_b:
+            st.write("#### 🌀
