@@ -2,16 +2,18 @@ import streamlit as st
 import yfinance as yf
 import pandas_ta as ta
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import pandas as pd
 
-# 1. 網頁基本設定
-st.set_page_config(page_title="KGI量化交易診斷器", layout="wide")
+# 1. 網頁頁面美化設定
+st.set_page_config(page_title="KGI量化情緒分析儀", layout="wide")
+st.markdown("""<style>.stMetric { background-color: #1e2130; border-radius: 10px; padding: 15px; border: 1px solid #3e4150; }</style>""", unsafe_allow_stdio=True)
 
-# 2. 側邊欄：進階參數設定
-st.sidebar.title("🛠 量化參數設定")
+# 2. 側邊欄控制
+st.sidebar.title("📊 參數設定")
 ticker_symbol = st.sidebar.text_input("輸入股票代號", "NVDA").upper()
-ma_fast = st.sidebar.slider("短線均線 (MA50)", 10, 100, 50)
-ma_slow = st.sidebar.slider("長線年線 (MA200)", 100, 300, 200)
+ma_fast = st.sidebar.slider("短線均線", 10, 100, 50)
+ma_slow = st.sidebar.slider("長線年線", 100, 300, 200)
 
 # 3. 數據抓取
 @st.cache_data(ttl=3600)
@@ -28,77 +30,58 @@ if not df.empty:
     df['SMA_F'] = ta.sma(df['Close'], length=ma_fast)
     df['SMA_S'] = ta.sma(df['Close'], length=ma_slow)
     df['RSI'] = ta.rsi(df['Close'], length=14)
+    # 增加交易量指標：5日平均成交量
+    df['Vol_MA5'] = ta.sma(df['Volume'], length=5)
     
     last = df.iloc[-1]
-    p = float(last['Close'])
-    f = float(last['SMA_F'])
-    s = float(last['SMA_S'])
-    rsi = float(last['RSI'])
+    prev = df.iloc[-2]
+    p, f, s, rsi = float(last['Close']), float(last['SMA_F']), float(last['SMA_S']), float(last['RSI'])
+    vol_curr = float(last['Volume'])
+    vol_ma5 = float(last['Vol_MA5'])
 
-    # --- 核心邏輯：加權評分系統 ---
+    # --- 核心邏輯：加權評分 (加入成交量與情緒) ---
     score = 0
-    reasons = []
+    signals = []
 
-    # 1. 趨勢分 (40分)
-    if p > s: 
-        score += 25
-        reasons.append("✅ 股價位於年線之上 (長線多頭)")
-    if f > s: 
-        score += 15
-        reasons.append("✅ 均線黃金交叉 (多頭排列)")
+    # A. 趨勢與成交量 (40%)
+    if p > s and f > s: 
+        score += 20
+        signals.append("🟢 長線多頭：股價在年線之上且均線交叉。")
+    
+    if vol_curr > vol_ma5 * 1.5:
+        score += 20
+        signals.append("🔥 成交量爆發：當前買氣極強，資金進場。")
+    elif vol_curr < vol_ma5 * 0.7:
+        score -= 10
+        signals.append("⚪ 成交量萎縮：買盤力道不足，小心量價背離。")
 
-    # 2. 動能分 (30分)
-    if 40 <= rsi <= 60:
+    # B. 投資人情緒溫度 (30%)
+    # 利用乖離率 (Bias) 與 RSI 判定
+    bias = (p - f) / f * 100
+    if 30 < rsi < 65:
         score += 30
-        reasons.append("✅ RSI 位處中性偏強區，具備上攻空間")
-    elif rsi < 40:
-        score += 15
-        reasons.append("⚠️ RSI 較低，雖有反彈機會但動能偏弱")
-    else:
-        reasons.append("❌ RSI 過熱，回檔風險高")
-
-    # 3. 位階分 (30分)
-    dist_to_ma = (p - f) / f
-    if -0.02 <= dist_to_ma <= 0.05: # 股價離短均線很近，代表支撐力強
-        score += 30
-        reasons.append("✅ 股價回測支撐位，為理想買點")
-    elif dist_to_ma > 0.15:
-        reasons.append("❌ 乖離率過大，不宜追高")
+        sentiment = "理性樂觀"
+        signals.append(f"⚖️ 情緒穩定：RSI ({rsi:.1f}) 處於健康區間。")
+    elif rsi >= 75:
+        score -= 20
+        sentiment = "極度狂熱"
+        signals.append("🔴 市場過熱：情緒指標進入超買區，隨時可能反轉。")
+    elif rsi <= 25:
+        score += 20 # 逆向思考
+        sentiment = "極度恐慌"
+        signals.append("🔵 恐慌買點：市場過度悲觀，通常是撿便宜的好時機。")
     else:
         score += 10
+        sentiment = "觀望中"
 
-    # --- 顯示介面 ---
-    st.title(f"🚀 {ticker_symbol} 量化診斷報告")
+    # C. 買點位階 (30%)
+    if -2 < bias < 3:
+        score += 30
+        signals.append("✅ 完美買點：價格回測支撐位。")
+
+    # --- 介面呈現 ---
+    st.title(f"🚀 {ticker_symbol} 情緒與量化診斷報告")
     
-    # 推薦程度儀表板
-    col_score, col_advice = st.columns([1, 2])
-    
-    with col_score:
-        st.subheader("🔥 推薦程度")
-        if score >= 80:
-            st.write(f"## ⭐⭐⭐⭐⭐")
-            st.success(f"評分：{score} / 100\n\n**強烈建議買入**")
-        elif 60 <= score < 80:
-            st.write(f"## ⭐⭐⭐⭐")
-            st.info(f"評分：{score} / 100\n\n**分批佈局**")
-        elif 40 <= score < 60:
-            st.write(f"## ⭐⭐⭐")
-            st.warning(f"評分：{score} / 100\n\n**中性觀望**")
-        else:
-            st.write(f"## ⭐")
-            st.error(f"評分：{score} / 100\n\n**暫不進場**")
-
-    with col_advice:
-        st.subheader("📝 買點與建議原因")
-        for r in reasons:
-            st.write(r)
-
-    # 圖表
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'))
-    fig.add_trace(go.Scatter(x=df.index, y=df['SMA_F'], name='短均線', line=dict(color='cyan')))
-    fig.add_trace(go.Scatter(x=df.index, y=df['SMA_S'], name='長年線', line=dict(color='magenta')))
-    fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=500)
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.error("無法分析該標的。")
+    # 儀表板
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("當前股價", f"${
