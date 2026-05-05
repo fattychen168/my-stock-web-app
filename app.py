@@ -5,10 +5,9 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 
-# 1. 網頁頁面設定
+# 1. 網頁頁面美化設定
 st.set_page_config(page_title="KGI量化分析領航員", layout="wide")
 
-# 2. 安全美化：使用 st.markdown 的安全寫法
 st.markdown("""
     <style>
     .stMetric {
@@ -21,64 +20,103 @@ st.markdown("""
     </style>
     """, unsafe_allow_stdio=True)
 
-# 3. 側邊欄控制
-st.sidebar.title("🛡️ 決策參數")
-# 支援多標的輸入，用逗號隔開
-ticker_input = st.sidebar.text_input("輸入股票代號 (多支請用逗號隔開)", "NVDA, AAPL, TSLA").upper()
-ticker_list = [t.strip() for t in ticker_input.split(",")]
+# 2. 側邊欄：決策參數輸入
+st.sidebar.title("🛡️ 決策參數設定")
+ticker_input = st.sidebar.text_input("輸入代號 (多支請用逗號隔開)", "NVDA, AAPL, TSLA").upper()
+ticker_list = [t.strip() for t in ticker_input.split(",") if t.strip()]
 
 ma_fast = st.sidebar.slider("短線趨勢 (MA50)", 10, 100, 50)
 ma_slow = st.sidebar.slider("長線年線 (MA200)", 100, 300, 200)
 
-# 4. 數據抓取函數 (含產業資訊)
+# 3. 核心數據抓取函數
 @st.cache_data(ttl=3600)
-def get_stock_all_info(symbol):
+def get_full_stock_data(symbol):
     try:
         stock = yf.Ticker(symbol)
         df = stock.history(period="2y")
-        if df.empty: return None, None
+        if df.empty:
+            return None, None
+        # 攤平多重索引問題
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         return df, stock.info
-    except:
+    except Exception as e:
         return None, None
 
-# 5. 主程式邏輯
-st.title("🚀 KGI量化分析儀：產業與情緒診斷")
+# 4. 主畫面佈局
+st.title("🚀 KGI量化分析儀：產業、規模與情緒診斷")
 
-# 建立多分頁，第一頁看詳細分析，第二頁看清單對比
-tab1, tab2 = st.tabs(["📌 單個深度診斷", "📋 多標的對比表"])
+tab1, tab2 = st.tabs(["📌 單個深度診斷", "📋 多標的評分對比"])
 
+# --- Tab 1: 深度診斷 ---
 with tab1:
-    selected_ticker = st.selectbox("選擇要查看的標的", ticker_list)
-    df, info = get_stock_all_info(selected_ticker)
+    if ticker_list:
+        selected_ticker = st.selectbox("選擇要查看的標的", ticker_list)
+        df, info = get_full_stock_data(selected_ticker)
+        
+        if df is not None:
+            # 市值分類邏輯
+            mcap = info.get('marketCap', 0)
+            if mcap > 2e11: size = "💎 超大型股"
+            elif mcap > 1e10: size = "🏢 大型股"
+            elif mcap > 2e9: size = "🧱 中型股"
+            else: size = "🌱 小型股"
+            
+            # 計算指標
+            df['SMA_F'] = ta.sma(df['Close'], length=ma_fast)
+            df['SMA_S'] = ta.sma(df['Close'], length=ma_slow)
+            df['RSI'] = ta.rsi(df['Close'], length=14)
+            
+            last_row = df.iloc[-1]
+            curr_p = float(last_row['Close'])
+            rsi_v = float(last_row['RSI'])
+            sma_f_v = float(last_row['SMA_F'])
+            sma_s_v = float(last_row['SMA_S'])
+
+            # 頂部產業與規模標籤
+            st.markdown(f"**產業：** `{info.get('sector', 'N/A')}` | **行業：** `{info.get('industry', 'N/A')}` | **市值：** `{size} (${mcap/1e9:.1f}B)`")
+            
+            # 關鍵數據指標卡
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("當前股價", f"${curr_p:.2f}")
+            c2.metric("RSI 動能", f"{rsi_v:.1f}")
+            c3.metric(f"{ma_fast}MA", f"${sma_f_v:.2f}")
+            c4.metric(f"{ma_slow}MA", f"${sma_s_v:.2f}")
+            
+            # 專業 Plotly 圖表
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
+            
+            # K線
+            fig.add_trace(go.Candlestick(
+                x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'
+            ), row=1, col=1)
+            
+            # 均線
+            fig.add_trace(go.Scatter(x=df.index, y=df['SMA_F'], name='短均', line=dict(color='cyan', width=1)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['SMA_S'], name='年線', line=dict(color='magenta', width=2)), row=1, col=1)
+            
+            # 成交量
+            fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='成交量', marker_color='gray', opacity=0.4), row=2, col=1)
+            
+            fig.update_layout(template="plotly_dark", height=700, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.error(f"找不到 {selected_ticker} 的數據。")
+
+# --- Tab 2: 多標的對比 ---
+with tab2:
+    st.subheader("📋 綜合量化評分表")
+    summary_list = []
     
-    if df is not None:
-        # 分類邏輯
-        mcap = info.get('marketCap', 0)
-        size = "💎 超大型" if mcap > 2e11 else "🏢 大型" if mcap > 1e10 else "🧱 中型" if mcap > 2e9 else "🌱 小型"
-        
-        # 指標計算
-        df['SMA_F'] = ta.sma(df['Close'], length=ma_fast)
-        df['SMA_S'] = ta.sma(df['Close'], length=ma_slow)
-        df['RSI'] = ta.rsi(df['Close'], length=14)
-        
-        last = df.iloc[-1]
-        p = float(last['Close'])
-        rsi = float(last['RSI'])
-        
-        # 顯示產業資訊
-        st.markdown(f"**產業：** `{info.get('sector', 'N/A')}` | **行業：** `{info.get('industry', 'N/A')}` | **市值：** `{size}股 (${mcap/1e9:.1f}B)`")
-        
-        # 數據卡片
-        c1, c2, c3 = st.columns(3)
-        c1.metric("當前股價", f"${p:.2f}")
-        c2.metric("RSI 動能", f"{rsi:.1f}")
-        c3.metric("52週高點", f"${info.get('fiftyTwoWeekHigh', 0):.2f}")
-        
-        # 繪圖
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
-        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['SMA_F'], name='短均', line=dict(color='cyan')), row=1, col=1)
-        fig.add_trace(go.
-                      
+    with st.spinner('正在分析清單中...'):
+        for t in ticker_list:
+            d, i = get_full_stock_data(t)
+            if d is not None:
+                p_val = float(d['Close'].iloc[-1])
+                rsi_val = float(ta.rsi(d['Close'], length=14).iloc[-1])
+                ma_s_val = float(ta.sma(d['Close'], length=ma_slow).iloc[-1])
+                
+                # 簡單評分邏輯
+                score = 0
+                if p_val > ma_s_val: score += 50
+                if
