@@ -4,100 +4,101 @@ import pandas_ta as ta
 import plotly.graph_objects as go
 import pandas as pd
 
-# 1. 網頁基本設定：讓外觀更專業
-st.set_page_config(page_title="KGI量化美股分析儀", layout="wide", initial_sidebar_state="expanded")
+# 1. 網頁基本設定
+st.set_page_config(page_title="KGI量化交易診斷器", layout="wide")
 
-# 加入自訂 CSS 讓字體更好看
-st.markdown("""
-    <style>
-    .main { background-color: #0e1117; }
-    .stMetric { background-color: #1e2130; padding: 15px; border-radius: 10px; border: 1px solid #3e4150; }
-    </style>
-    """, unsafe_allow_stdio=True)
-
-# 2. 側邊欄控制區
-st.sidebar.title("🛠 系統設定")
+# 2. 側邊欄：進階參數設定
+st.sidebar.title("🛠 量化參數設定")
 ticker_symbol = st.sidebar.text_input("輸入股票代號", "NVDA").upper()
-ma_fast = st.sidebar.number_input("短線均線 (例如 50)", value=50)
-ma_slow = st.sidebar.number_input("長線均線 (例如 200)", value=200)
+ma_fast = st.sidebar.slider("短線均線 (MA50)", 10, 100, 50)
+ma_slow = st.sidebar.slider("長線年線 (MA200)", 100, 300, 200)
 
-# 3. 數據抓取模組
-@st.cache_data(ttl=3600) # 快取 1 小時
-def get_stock_data(symbol):
-    try:
-        df = yf.download(symbol, period="2y") # 抓兩年數據以便計算長均線
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        return df
-    except:
-        return pd.DataFrame()
+# 3. 數據抓取
+@st.cache_data(ttl=3600)
+def get_data(symbol):
+    df = yf.download(symbol, period="2y")
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    return df
 
-df = get_stock_data(ticker_symbol)
+df = get_data(ticker_symbol)
 
-# 4. 主畫面邏輯
 if not df.empty:
-    # --- 計算技術指標 ---
-    df['SMA_Fast'] = ta.sma(df['Close'], length=ma_fast)
-    df['SMA_Slow'] = ta.sma(df['Close'], length=ma_slow)
+    # --- 指標計算 ---
+    df['SMA_F'] = ta.sma(df['Close'], length=ma_fast)
+    df['SMA_S'] = ta.sma(df['Close'], length=ma_slow)
     df['RSI'] = ta.rsi(df['Close'], length=14)
     
-    # 取得最新數值
     last = df.iloc[-1]
-    price = float(last['Close'])
-    fast_val = float(last['SMA_Fast'])
-    slow_val = float(last['SMA_Slow'])
-    rsi_val = float(last['RSI'])
-    
-    # --- 第一區：指標儀表板 ---
-    st.title(f"📊 {ticker_symbol} 即時量化報告")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("當前股價", f"${price:.2f}")
-    c2.metric(f"{ma_fast}MA (短線)", f"${fast_val:.2f}")
-    c3.metric(f"{ma_slow}MA (長線)", f"${slow_val:.2f}")
-    c4.metric("RSI 強度", f"{rsi_val:.1f}")
+    p = float(last['Close'])
+    f = float(last['SMA_F'])
+    s = float(last['SMA_S'])
+    rsi = float(last['RSI'])
 
-    # --- 第二區：自動篩選邏輯與訊號 ---
-    st.divider()
-    col_info, col_signal = st.columns([2, 1])
-    
-    with col_info:
-        st.subheader("💡 智慧診斷")
-        # 邏輯判斷
-        is_bullish = price > slow_val
-        is_golden_cross = fast_val > slow_val
-        is_overbought = rsi_val > 70
-        is_oversold = rsi_val < 30
-        
-        # 顯示條件清單
-        st.write(f"1. 股價是否站上年線：{'✅ 是' if is_bullish else '❌ 否'}")
-        st.write(f"2. 均線是否形成多頭排列：{'✅ 是' if is_golden_cross else '❌ 否'}")
-        st.write(f"3. RSI 狀態：{'🔥 超買 (過熱)' if is_overbought else '❄️ 超賣 (過冷)' if is_oversold else '⚖️ 中性'}")
+    # --- 核心邏輯：加權評分系統 ---
+    score = 0
+    reasons = []
 
-    with col_signal:
-        st.subheader("🚩 操作建議")
-        if is_bullish and is_golden_cross and not is_overbought:
-            st.success("🎯 強烈建議：趨勢多頭，且尚未過熱，適合關注。")
-        elif not is_bullish:
-            st.error("📉 觀望：目前處於空頭趨勢，建議耐心等待。")
+    # 1. 趨勢分 (40分)
+    if p > s: 
+        score += 25
+        reasons.append("✅ 股價位於年線之上 (長線多頭)")
+    if f > s: 
+        score += 15
+        reasons.append("✅ 均線黃金交叉 (多頭排列)")
+
+    # 2. 動能分 (30分)
+    if 40 <= rsi <= 60:
+        score += 30
+        reasons.append("✅ RSI 位處中性偏強區，具備上攻空間")
+    elif rsi < 40:
+        score += 15
+        reasons.append("⚠️ RSI 較低，雖有反彈機會但動能偏弱")
+    else:
+        reasons.append("❌ RSI 過熱，回檔風險高")
+
+    # 3. 位階分 (30分)
+    dist_to_ma = (p - f) / f
+    if -0.02 <= dist_to_ma <= 0.05: # 股價離短均線很近，代表支撐力強
+        score += 30
+        reasons.append("✅ 股價回測支撐位，為理想買點")
+    elif dist_to_ma > 0.15:
+        reasons.append("❌ 乖離率過大，不宜追高")
+    else:
+        score += 10
+
+    # --- 顯示介面 ---
+    st.title(f"🚀 {ticker_symbol} 量化診斷報告")
+    
+    # 推薦程度儀表板
+    col_score, col_advice = st.columns([1, 2])
+    
+    with col_score:
+        st.subheader("🔥 推薦程度")
+        if score >= 80:
+            st.write(f"## ⭐⭐⭐⭐⭐")
+            st.success(f"評分：{score} / 100\n\n**強烈建議買入**")
+        elif 60 <= score < 80:
+            st.write(f"## ⭐⭐⭐⭐")
+            st.info(f"評分：{score} / 100\n\n**分批佈局**")
+        elif 40 <= score < 60:
+            st.write(f"## ⭐⭐⭐")
+            st.warning(f"評分：{score} / 100\n\n**中性觀望**")
         else:
-            st.info("⌛ 中性：趨勢不明或處於盤整，建議分批佈局。")
+            st.write(f"## ⭐")
+            st.error(f"評分：{score} / 100\n\n**暫不進場**")
 
-    # --- 第三區：互動 K 線圖 ---
-    st.divider()
+    with col_advice:
+        st.subheader("📝 買點與建議原因")
+        for r in reasons:
+            st.write(r)
+
+    # 圖表
     fig = go.Figure()
-    # K 線
-    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'],
-                                low=df['Low'], close=df['Close'], name='K線'))
-    # 均線
-    fig.add_trace(go.Scatter(x=df.index, y=df['SMA_Fast'], name=f'{ma_fast}MA', line=dict(color='#00ff00', width=1.5)))
-    fig.add_trace(go.Scatter(x=df.index, y=df['SMA_Slow'], name=f'{ma_slow}MA', line=dict(color='#ff0000', width=2)))
-    
-    fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False,
-                      margin=dict(l=10, r=10, t=30, b=10))
+    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'))
+    fig.add_trace(go.Scatter(x=df.index, y=df['SMA_F'], name='短均線', line=dict(color='cyan')))
+    fig.add_trace(go.Scatter(x=df.index, y=df['SMA_S'], name='長年線', line=dict(color='magenta')))
+    fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=500)
     st.plotly_chart(fig, use_container_width=True)
-
-    # --- 第四區：數據明細 ---
-    with st.expander("查看原始數據明細"):
-        st.write(df.tail(10))
-
 else:
+    st.error("無法分析該標的。")
