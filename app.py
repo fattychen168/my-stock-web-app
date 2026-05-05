@@ -15,7 +15,7 @@ st.sidebar.title("🌍 全球市場監控")
 
 @st.cache_data(ttl=300) # 每 5 分鐘刷新一次
 def get_market_indices():
-    # 核心指數：標普500, 納指100, 道瓊, VIX, 10年債
+    # 核心指數與期貨清單
     index_list = {
         "^GSPC": "標普 500",
         "^IXIC": "納斯達克",
@@ -33,20 +33,26 @@ def get_market_indices():
                 curr = h['Close'].iloc[-1]
                 prev = h['Close'].iloc[-2]
                 change = ((curr / prev) - 1) * 100
-                data.append({"名稱": name, "點位": round(float(curr), 2), "漲跌%": round(float(change), 2)})
+                data.append({
+                    "名稱": name, 
+                    "點位": round(float(curr), 2), 
+                    "漲跌%": round(float(change), 2)
+                })
         except:
             continue
     return pd.DataFrame(data)
 
 st.sidebar.subheader("核心指數與期貨")
 indices_df = get_market_indices()
+
 if not indices_df.empty:
-    # 格式化顯示表格
+    # 修正 AttributeError: 將 applymap 改為 map (相容新版 Pandas)
     def color_change(val):
         color = '#ff4b4b' if val < 0 else '#00f900'
         return f'color: {color}'
     
-    st.sidebar.table(indices_df.style.applymap(color_change, subset=['漲跌%']))
+    # 使用相容性更好的 Styler
+    st.sidebar.table(indices_df.style.map(color_change, subset=['漲跌%']))
 
 st.sidebar.divider()
 target = st.sidebar.text_input("🔍 診斷標的代號 (例如: NVDA)", "NVDA").upper().strip()
@@ -118,10 +124,12 @@ if target:
             else: st.write("動能盤整中")
         with cb:
             st.info("🌀 中線 (50MA)")
-            st.success("多頭：站穩季線") if p_v > f_v else st.error("弱勢：跌破季線")
+            if p_v > f_v: st.success("多頭：站穩季線")
+            else: st.error("弱勢：跌破季線")
         with cc:
             st.info("📜 長線 (200MA)")
-            st.success("長多：趨勢向上") if p_v > s_v else st.warning("保守：年線之下")
+            if p_val > s_val: st.success("長多：趨勢向上")
+            else: st.warning("保守：年線之下")
 
         st.divider()
 
