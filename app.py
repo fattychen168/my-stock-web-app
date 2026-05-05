@@ -115,4 +115,4 @@ if target:
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
         
         # 1. K線圖
-        fig.add_trace(go.)
+        fig.add_trace(go.
