@@ -1,0 +1,5 @@
+[server]
+runOnSave = true
+
+[platform]
+pythonVersion = "3.12"
