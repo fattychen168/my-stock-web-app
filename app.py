@@ -21,28 +21,22 @@ ma_slow = st.sidebar.slider("長線年線位置", 100, 300, 200)
 
 run_button = st.sidebar.button("🚀 開始量化分析")
 
-# 3. 數據抓取函數 (強化備援機制)
+# 3. 數據抓取函數 (強化備援)
 @st.cache_data(ttl=86400)
-def fetch_stock_data(symbol):
-    # 加入隨機延遲避開偵測
+def fetch_stock_full_data(symbol):
     time.sleep(random.uniform(1.0, 2.0))
     try:
-        # 優先使用 yf.download (這通常在雲端環境比 Ticker.history 更穩)
-        df = yf.download(symbol, period="2y", progress=False, timeout=20)
-        
+        stock = yf.Ticker(symbol)
+        df = stock.history(period="2y", timeout=25)
         if df.empty:
-            # 備援：使用 Ticker 物件
-            stock = yf.Ticker(symbol)
-            df = stock.history(period="2y")
-            
+            df = yf.download(symbol, period="2y", progress=False, timeout=25)
         if not df.empty:
-            # 處理多重索引
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
-            return df
+            return df, stock.info
     except:
-        return None
-    return None
+        return None, None
+    return None, None
 
 # 4. 主畫面邏輯
 st.title("📈 智能量化診斷儀")
@@ -52,8 +46,8 @@ if run_button and ticker_list:
 
     with tab1:
         target = ticker_list[0]
-        with st.spinner(f"正在連線 Yahoo 數據源分析 {target}..."):
-            df = fetch_stock_data(target)
+        with st.spinner(f"正在分析 {target} 並生成建議..."):
+            df, info = fetch_stock_full_data(target)
             
             if df is not None and not df.empty:
                 # 指標計算
@@ -63,48 +57,80 @@ if run_button and ticker_list:
                 
                 last = df.iloc[-1]
                 p_val = float(last['Close'])
-                r_val = float(last['RSI']) if not pd.isna(last['RSI']) else 0.0
+                r_val = float(last['RSI']) if not pd.isna(last['RSI']) else 50.0
                 f_val = float(last['SMA_F']) if not pd.isna(last['SMA_F']) else 0.0
                 s_val = float(last['SMA_S']) if not pd.isna(last['SMA_S']) else 0.0
 
-                st.subheader(f"🔍 {target} 診斷報告")
-                
-                # 數據卡片
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("當前股價", f"${p_val:.2f}")
-                col2.metric("RSI動能", f"{r_val:.1f}")
-                col3.metric(f"{ma_fast}MA", f"${f_val:.2f}")
-                col4.metric(f"{ma_slow}MA", f"${s_val:.2f}")
+                # A. 規模判定邏輯
+                mcap = info.get('marketCap', 0)
+                if mcap >= 2e11: size_tag = "💎 超大型股 (Mega-Cap)"
+                elif mcap >= 1e10: size_tag = "🏢 大型股 (Large-Cap)"
+                elif mcap >= 2e9: size_tag = "🧱 中型股 (Mid-Cap)"
+                else: size_tag = "🌱 小型股 (Small-Cap)"
 
-                # 繪圖區
+                st.subheader(f"🔍 {target} | {info.get('longName', target)}")
+                st.markdown(f"**市值規模：** `{size_tag}` | **產業：** `{info.get('sector', 'N/A')}`")
+
+                # B. 操作建議邏輯
+                st.divider()
+                col_adv1, col_adv2, col_adv3 = st.columns(3)
+                
+                # 短線建議 (RSI + 股價vs短均)
+                with col_adv1:
+                    st.write("### ⚡ 短線建議")
+                    if r_val > 70: st.warning("過熱：RSI過高，建議分批獲利了結，不宜追高。")
+                    elif r_val < 30: st.success("超跌：RSI進入超賣區，具備反彈潛力，可小量試單。")
+                    else: st.info("中性：動能穩定，適合觀察短線支撐。")
+
+                # 中線建議 (股價 vs 50MA)
+                with col_adv2:
+                    st.write("### 🌀 中線建議")
+                    if p_val > f_val: st.success("多頭：股價站穩短均線，回測不破可視為加碼點。")
+                    else: st.error("弱勢：股價跌破短均線，中線轉趨震盪，建議縮減部位。")
+
+                # 長線建議 (股價 vs 200MA)
+                with col_adv3:
+                    st.write("### 📜 長線建議")
+                    if p_val > s_val: st.success("長多：股價運行於年線之上，適合長期領息或波段持有。")
+                    else: st.warning("保守：股價低於年線，長線趨勢尚未反轉，建議觀望。")
+
+                st.divider()
+
+                # C. 數據卡片
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("當前股價", f"${p_val:.2f}")
+                c2.metric("RSI 指標", f"{r_val:.1f}")
+                c3.metric(f"{ma_fast}MA (短)", f"${f_val:.2f}")
+                c4.metric(f"{ma_slow}MA (長)", f"${s_val:.2f}")
+
+                # D. 圖表
                 fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
-                
-                # K線圖
                 fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
-                # 均線
-                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_F'], name='短均', line=dict(color='cyan', width=1.5)), row=1, col=1)
-                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_S'], name='年線', line=dict(color='magenta', width=2)), row=1, col=1)
-                # 成交量
+                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_F'], name='短均', line=dict(color='cyan')), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_S'], name='長均', line=dict(color='magenta')), row=1, col=1)
                 fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='量', marker_color='gray', opacity=0.3), row=2, col=1)
-                
-                fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
+                fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False)
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.error(f"目前 Yahoo 伺服器對 {target} 請求無回應。這通常是暫時性的 IP 限制，請等候 10 分鐘再試。")
+                st.error("目前無法取得數據，請檢查代號或等候 Yahoo 伺服器解鎖。")
 
     with tab2:
-        st.subheader("📋 快速對比清單")
+        st.subheader("📋 快速規模與價格對比")
         summary_data = []
         for t in ticker_list:
-            d = fetch_stock_data(t)
+            d, i = fetch_stock_full_data(t)
             if d is not None:
                 cp = float(d['Close'].iloc[-1])
-                summary_data.append({"代號": t, "價格": round(cp, 2)})
-        
+                mc = i.get('marketCap', 0)
+                summary_data.append({
+                    "代號": t, 
+                    "股價": round(cp, 2), 
+                    "市值(B)": round(mc/1e9, 1),
+                    "產業": i.get('sector', 'N/A')
+                })
         if summary_data:
             st.table(pd.DataFrame(summary_data))
-        else:
-            st.warning("暫無對比數據，請確認代號是否正確。")
-
+else:
+    st.info("💡 請在左側輸入代號並點擊按鈕啟動診斷。")
 else:
     st.info("💡 請在左側輸入代號並按下『🚀 開始量化分析』。")
