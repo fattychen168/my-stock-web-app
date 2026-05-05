@@ -55,13 +55,10 @@ if run_button and ticker_list:
                 df['RSI'] = ta.rsi(df['Close'], length=14)
                 
                 last = df.iloc[-1]
-                def safe_num(val):
-                    return float(val) if not pd.isna(val) else 0.0
-
-                p_val = safe_num(last['Close'])
-                r_val = safe_num(last['RSI'])
-                f_val = safe_num(last['SMA_F'])
-                s_val = safe_num(last['SMA_S'])
+                p_val = float(last['Close'])
+                r_val = float(last['RSI']) if not pd.isna(last['RSI']) else 0.0
+                f_val = float(last['SMA_F']) if not pd.isna(last['SMA_F']) else 0.0
+                s_val = float(last['SMA_S']) if not pd.isna(last['SMA_S']) else 0.0
 
                 st.subheader(f"🔍 {target} 診斷報告")
                 st.write(f"公司: {info.get('longName', 'N/A')} | 產業: {info.get('sector', 'N/A')}")
@@ -72,7 +69,30 @@ if run_button and ticker_list:
                 col3.metric(f"{ma_fast}MA", f"${f_val:.2f}")
                 col4.metric(f"{ma_slow}MA", f"${s_val:.2f}")
 
+                # 繪圖區 (採緊湊寫法避免括號錯誤)
                 fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
+                
                 fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
                 fig.add_trace(go.Scatter(x=df.index, y=df['SMA_F'], name='短均', line=dict(color='cyan')), row=1, col=1)
-                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_S'], name='年線',
+                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_S'], name='年線', line=dict(color='magenta')), row=1, col=1)
+                fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='量', marker_color='gray', opacity=0.3), row=2, col=1)
+                
+                fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.error("無法取得數據，請確認代號正確或稍後再試。")
+
+    with tab2:
+        st.subheader("📋 快速對比")
+        summary_data = []
+        for t in ticker_list:
+            d, _ = fetch_stock_data(t)
+            if d is not None:
+                cp = float(d['Close'].iloc[-1])
+                summary_data.append({"代號": t, "價格": round(cp, 2)})
+        
+        if summary_data:
+            st.table(pd.DataFrame(summary_data))
+
+else:
+    st.info("💡 請在左側輸入代號並按下『🚀 開始量化分析』。")
