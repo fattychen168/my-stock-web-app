@@ -10,7 +10,8 @@ st.set_page_config(page_title="KGI量化分析領航員", layout="wide")
 
 # 2. 側邊欄參數設定
 st.sidebar.title("🛡️ 決策參數設定")
-ticker_input = st.sidebar.text_input("輸入代號 (多支請用逗號隔開)", "NVDA, AAPL, TSLA").upper()
+# 這裡輸入代號，例如: NVDA
+ticker_input = st.sidebar.text_input("輸入代號 (多支請用逗號隔開)", "NVDA").upper()
 ticker_list = [t.strip() for t in ticker_input.split(",") if t.strip()]
 
 ma_fast = st.sidebar.slider("短線趨勢 (MA50)", 10, 100, 50)
@@ -33,15 +34,18 @@ def get_full_stock_data(symbol):
 # 4. 主畫面標題
 st.title("🚀 KGI量化分析儀：產業、規模與情緒診斷")
 
-tab1, tab2 = st.tabs(["📌 單個深度診斷", "📋 多標的評分對比"])
+tab1, tab2 = st.tabs(["📌 深度診斷報告", "📋 多標的評分對比"])
 
-# --- Tab 1: 單個深度診斷 ---
+# --- Tab 1: 深度診斷 (直接顯示第一個標的，去除選單) ---
 with tab1:
     if ticker_list:
-        selected_ticker = st.selectbox("選擇要查看的標的", ticker_list)
-        df, info = get_full_stock_data(selected_ticker)
+        # 自動選取清單中的第一個代號
+        target = ticker_list[0] 
+        df, info = get_full_stock_data(target)
         
         if df is not None:
+            st.subheader(f"🔍 {target} 詳細診斷")
+            
             # 市值分類
             mcap = info.get('marketCap', 0)
             size = "💎 超大型" if mcap > 2e11 else "🏢 大型" if mcap > 1e10 else "🧱 中型" if mcap > 2e9 else "🌱 小型"
@@ -73,8 +77,10 @@ with tab1:
             fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='成交量', marker_color='gray', opacity=0.4), row=2, col=1)
             fig.update_layout(template="plotly_dark", height=700, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
             st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("請在側邊欄輸入股票代號。")
 
-# --- Tab 2: 多標的評分對比 (修正括號問題) ---
+# --- Tab 2: 多標的評分對比 ---
 with tab2:
     st.subheader("📋 綜合量化評分表")
     summary_list = []
@@ -90,5 +96,20 @@ with tab2:
                     ma_s_series = ta.sma(d['Close'], length=ma_slow)
                     ma_s_val = float(ma_s_series.iloc[-1]) if not ma_s_series.empty else 0
                     
-                    # 評分邏輯
-                    score
+                    score = 0
+                    if p_val > ma_s_val: score += 50
+                    if 40 < rsi_val < 70: score += 50
+                    
+                    summary_list.append({
+                        "代號": t,
+                        "股價": round(p_val, 2),
+                        "RSI": round(rsi_val, 1),
+                        "產業": i.get('sector', 'N/A'),
+                        "量化總分": score,
+                        "建議": "🚀 看多" if score >= 100 else "⚖️ 中性" if score >= 50 else "❄️ 弱勢"
+                    })
+            
+            if summary_list:
+                st.dataframe(pd.DataFrame(summary_list), use_container_width=True)
+    else:
+        st.info("請在側邊欄輸入股票代號。")
