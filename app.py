@@ -23,11 +23,12 @@ st.markdown("""
     </style>
     """, unsafe_allow_stdio=True)
 
-# 2. 側邊欄：市場監控
+# 2. 側邊欄：市場監控排行榜
 st.sidebar.title("📊 市場監控")
 
 @st.cache_data(ttl=600)
 def get_top_movers():
+    # 預設觀察名單
     watch_list = ["NVDA", "TSLA", "AMD", "SMCI", "ARM", "COIN", "MARA", "PLTR", "SOXL", "TSM"]
     data = []
     for t in watch_list:
@@ -77,7 +78,8 @@ if target:
         df['RSI'] = ta.rsi(df['Close'], length=14)
         
         last = df.iloc[-1]
-        p_v, r_v = float(last['Close']), float(last['RSI']) if not pd.isna(last['RSI']) else 50.0
+        p_v = float(last['Close'])
+        r_v = float(last['RSI']) if not pd.isna(last['RSI']) else 50.0
         f_v = float(last['SMA_F']) if not pd.isna(last['SMA_F']) else 0.0
         s_v = float(last['SMA_S']) if not pd.isna(last['SMA_S']) else 0.0
 
@@ -104,15 +106,28 @@ if target:
             else: st.info("中性：動能盤整")
         with cb:
             st.write("🌀 中線 (50MA)")
-            st.success("多頭：站穩季線") if p_v > f_v else st.error("弱勢：跌破季線")
+            st.success("多頭：站穩季線") if p_v > f_val else st.error("弱勢：跌破季線")
         with cc:
             st.write("📜 長線 (200MA)")
-            st.success("長多：趨勢向上") if p_v > s_v else st.warning("保守：年線之下")
+            st.success("長多：趨勢向上") if p_v > s_val else st.warning("保守：年線之下")
 
         st.divider()
 
-        # 核心繪圖區 (嚴格檢查括號)
+        # 核心繪圖區 - 嚴格確保括號成對
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
         
         # 1. K線圖
-        fig.add_trace(go.
+        k_trace = go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線')
+        fig.add_trace(k_trace, row=1, col=1)
+        
+        # 2. 均線
+        fig.add_trace(go.Scatter(x=df.index, y=df['SMA_F'], name='50MA', line=dict(color='#00d4ff')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['SMA_S'], name='200MA', line=dict(color='#ff00ff')), row=1, col=1)
+        
+        # 3. 成交量
+        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='量', marker_color='#4e5d6c', opacity=0.5), row=2, col=1)
+        
+        fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.error("暫時無法取得數據，請確認代號正確或等候 15 分鐘冷卻期。")
