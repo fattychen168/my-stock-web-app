@@ -7,28 +7,15 @@ import pandas as pd
 import numpy as np
 import time
 
-# 1. 頁面設定與美化
+# 1. 頁面基礎設定
 st.set_page_config(page_title="全球美股量化診斷儀", layout="wide")
 
-st.markdown("""
-    <style>
-    .stApp { background-color: #0e1117; }
-    div[data-testid="stMetric"] {
-        background-color: #1e2130;
-        border: 1px solid #3e4150;
-        padding: 15px;
-        border-radius: 12px;
-    }
-    h1, h2, h3 { color: #deff9a !important; }
-    </style>
-    """, unsafe_allow_stdio=True)
-
-# 2. 側邊欄：市場監控排行榜
+# 2. 側邊欄：市場監控
 st.sidebar.title("📊 市場監控")
 
 @st.cache_data(ttl=600)
 def get_top_movers():
-    # 預設觀察名單
+    # 預設一組熱門股做監測
     watch_list = ["NVDA", "TSLA", "AMD", "SMCI", "ARM", "COIN", "MARA", "PLTR", "SOXL", "TSM"]
     data = []
     for t in watch_list:
@@ -37,7 +24,7 @@ def get_top_movers():
             h = s.history(period="2d")
             if len(h) >= 2:
                 change = ((h['Close'].iloc[-1] / h['Close'].iloc[-2]) - 1) * 100
-                data.append({"代號": t, "漲跌%": round(change, 2), "股價": round(h['Close'].iloc[-1], 2)})
+                data.append({"代號": t, "漲跌%": round(float(change), 2), "股價": round(float(h['Close'].iloc[-1]), 2)})
         except:
             continue
     return pd.DataFrame(data).sort_values(by="漲跌%", ascending=False)
@@ -50,7 +37,7 @@ if not movers_df.empty:
 st.sidebar.divider()
 target = st.sidebar.text_input("🔍 輸入深度診斷代號", "NVDA").upper().strip()
 
-# 3. 數據抓取
+# 3. 數據抓取函數 (強化數值格式)
 @st.cache_data(ttl=3600)
 def fetch_stock_data(symbol):
     try:
@@ -67,8 +54,9 @@ def fetch_stock_data(symbol):
     return None, None
 
 # 4. 主畫面邏輯
+st.title("📈 智能量化診斷儀")
+
 if target:
-    st.title(f"🚀 {target} 深度量化診斷")
     df, info = fetch_stock_data(target)
     
     if df is not None and not df.empty:
@@ -77,18 +65,29 @@ if target:
         df['SMA_S'] = ta.sma(df['Close'], length=200)
         df['RSI'] = ta.rsi(df['Close'], length=14)
         
+        # --- 數據安全清洗區 ---
         last = df.iloc[-1]
-        p_v = float(last['Close'])
-        r_v = float(last['RSI']) if not pd.isna(last['RSI']) else 50.0
-        f_v = float(last['SMA_F']) if not pd.isna(last['SMA_F']) else 0.0
-        s_v = float(last['SMA_S']) if not pd.isna(last['SMA_S']) else 0.0
+        
+        def safe_float(val):
+            try:
+                # 確保取出的是單一數值而不是 Series
+                extracted = val.item() if hasattr(val, 'item') else val
+                return float(extracted) if not pd.isna(extracted) else 0.0
+            except:
+                return 0.0
+
+        p_v = safe_float(last['Close'])
+        r_v = safe_float(last['RSI'])
+        f_v = safe_float(last['SMA_F'])
+        s_v = safe_float(last['SMA_S'])
 
         # 市值判定
         mcap = info.get('marketCap', 0)
         size = "💎 超大型股" if mcap > 2e11 else "🏢 大型股" if mcap > 1e10 else "🧱 中型股" if mcap > 2e9 else "🌱 小型股"
-        st.markdown(f"**公司：** `{info.get('longName', 'N/A')}` | **規模：** `{size}` | **產業：** `{info.get('sector', 'N/A')}`")
+        st.write(f"**公司：** {info.get('longName', 'N/A')} | **規模：** {size} | **產業：** {info.get('sector', 'N/A')}")
 
-        # 指標卡
+        # 指標卡 (這部分是之前 TypeError 的重災區，現已加強)
+        st.divider()
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("當前股價", f"${p_v:.2f}")
         c2.metric("RSI 動能", f"{r_v:.1f}")
@@ -100,34 +99,28 @@ if target:
         st.write("### 📝 操作建議")
         ca, cb, cc = st.columns(3)
         with ca:
-            st.write("⚡ 短線 (RSI)")
+            st.info("⚡ 短線 (RSI)")
             if r_v > 70: st.warning("過熱：建議分批獲利")
-            elif r_v < 30: st.success("超跌：具反彈潛力")
-            else: st.info("中性：動能盤整")
+            elif r_val < 30: st.success("超跌：具反彈潛力")
+            else: st.write("動能盤整中")
         with cb:
-            st.write("🌀 中線 (50MA)")
-            st.success("多頭：站穩季線") if p_v > f_val else st.error("弱勢：跌破季線")
+            st.info("🌀 中線 (50MA)")
+            st.success("多頭：站穩季線") if p_v > f_v else st.error("弱勢：跌破季線")
         with cc:
-            st.write("📜 長線 (200MA)")
-            st.success("長多：趨勢向上") if p_v > s_val else st.warning("保守：年線之下")
+            st.info("📜 長線 (200MA)")
+            st.success("長多：趨勢向上") if p_v > s_v else st.warning("保守：年線之下")
 
         st.divider()
 
-        # 核心繪圖區 - 嚴格確保括號成對
+        # 核心繪圖區
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
-        
-        # 1. K線圖
-        k_trace = go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線')
-        fig.add_trace(k_trace, row=1, col=1)
-        
-        # 2. 均線
+        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['SMA_F'], name='50MA', line=dict(color='#00d4ff')), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['SMA_S'], name='200MA', line=dict(color='#ff00ff')), row=1, col=1)
-        
-        # 3. 成交量
         fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='量', marker_color='#4e5d6c', opacity=0.5), row=2, col=1)
-        
         fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.error("暫時無法取得數據，請確認代號正確或等候 15 分鐘冷卻期。")
+        st.error("暫時無法取得數據，請確認代號或等候 15 分鐘冷卻期。")
+else:
+    st.info("👈 請在左側輸入代號開始分析。")
