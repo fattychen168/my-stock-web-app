@@ -10,33 +10,48 @@ import time
 # 1. 頁面基礎設定
 st.set_page_config(page_title="全球美股量化診斷儀", layout="wide")
 
-# 2. 側邊欄：市場監控
-st.sidebar.title("📊 市場監控")
+# 2. 側邊欄：指數與期貨監控
+st.sidebar.title("🌍 全球市場監控")
 
-@st.cache_data(ttl=600)
-def get_top_movers():
-    watch_list = ["NVDA", "TSLA", "AMD", "SMCI", "ARM", "COIN", "MARA", "PLTR", "SOXL", "TSM"]
+@st.cache_data(ttl=300) # 每 5 分鐘刷新一次
+def get_market_indices():
+    # 核心指數：標普500, 納指100, 道瓊, VIX, 10年債
+    index_list = {
+        "^GSPC": "標普 500",
+        "^IXIC": "納斯達克",
+        "^DJI": "道瓊工業",
+        "^VIX": "恐慌指數",
+        "ES=F": "標普期貨",
+        "NQ=F": "納指期貨"
+    }
     data = []
-    for t in watch_list:
+    for ticker, name in index_list.items():
         try:
-            s = yf.Ticker(t)
+            s = yf.Ticker(ticker)
             h = s.history(period="2d")
             if len(h) >= 2:
-                change = ((h['Close'].iloc[-1] / h['Close'].iloc[-2]) - 1) * 100
-                data.append({"代號": t, "漲跌%": round(float(change), 2), "股價": round(float(h['Close'].iloc[-1]), 2)})
+                curr = h['Close'].iloc[-1]
+                prev = h['Close'].iloc[-2]
+                change = ((curr / prev) - 1) * 100
+                data.append({"名稱": name, "點位": round(float(curr), 2), "漲跌%": round(float(change), 2)})
         except:
             continue
-    return pd.DataFrame(data).sort_values(by="漲跌%", ascending=False)
+    return pd.DataFrame(data)
 
-st.sidebar.subheader("今日表現排行榜")
-movers_df = get_top_movers()
-if not movers_df.empty:
-    st.sidebar.table(movers_df.head(10))
+st.sidebar.subheader("核心指數與期貨")
+indices_df = get_market_indices()
+if not indices_df.empty:
+    # 格式化顯示表格
+    def color_change(val):
+        color = '#ff4b4b' if val < 0 else '#00f900'
+        return f'color: {color}'
+    
+    st.sidebar.table(indices_df.style.applymap(color_change, subset=['漲跌%']))
 
 st.sidebar.divider()
-target = st.sidebar.text_input("🔍 輸入深度診斷代號", "NVDA").upper().strip()
+target = st.sidebar.text_input("🔍 診斷標的代號 (例如: NVDA)", "NVDA").upper().strip()
 
-# 3. 數據抓取
+# 3. 數據抓取函數
 @st.cache_data(ttl=3600)
 def fetch_stock_data(symbol):
     try:
@@ -66,7 +81,6 @@ if target:
         
         last = df.iloc[-1]
         
-        # 安全數值轉換函數
         def safe_float(val):
             try:
                 v = val.item() if hasattr(val, 'item') else val
@@ -74,7 +88,6 @@ if target:
             except:
                 return 0.0
 
-        # 統一變數命名，避免 NameError
         p_v = safe_float(last['Close'])
         r_v = safe_float(last['RSI'])
         f_v = safe_float(last['SMA_F'])
@@ -83,6 +96,7 @@ if target:
         # 市值判定
         mcap = info.get('marketCap', 0)
         size = "💎 超大型股" if mcap > 2e11 else "🏢 大型股" if mcap > 1e10 else "🧱 中型股" if mcap > 2e9 else "🌱 小型股"
+        
         st.write(f"**公司：** {info.get('longName', 'N/A')} | **規模：** {size} | **產業：** {info.get('sector', 'N/A')}")
 
         # 指標卡
@@ -93,7 +107,7 @@ if target:
         c3.metric("50MA (季線)", f"${f_v:.2f}")
         c4.metric("200MA (年線)", f"${s_v:.2f}")
 
-        # 操作建議 (修正 NameError 的位置)
+        # 操作建議
         st.divider()
         st.write("### 📝 操作建議")
         ca, cb, cc = st.columns(3)
@@ -104,12 +118,10 @@ if target:
             else: st.write("動能盤整中")
         with cb:
             st.info("🌀 中線 (50MA)")
-            if p_v > f_v: st.success("多頭：站穩季線")
-            else: st.error("弱勢：跌破季線")
+            st.success("多頭：站穩季線") if p_v > f_v else st.error("弱勢：跌破季線")
         with cc:
             st.info("📜 長線 (200MA)")
-            if p_v > s_v: st.success("長多：趨勢向上")
-            else: st.warning("保守：年線之下")
+            st.success("長多：趨勢向上") if p_v > s_v else st.warning("保守：年線之下")
 
         st.divider()
 
